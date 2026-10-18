@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cyber Runner</title>
+<style>
+  body { margin: 0; overflow: hidden; font-family: sans-serif; touch-action: none; }
+  #score { position: absolute; top: 10px; left: 10px; color: #00ffff;
+           font-size: 24px; text-shadow: 0 0 10px #00ffff, 2px 2px black; z-index: 10; font-weight: bold; }
+  #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+             color: #ff00ff; font-size: 30px; text-shadow: 0 0 15px #ff00ff; text-align: center; }
+</style>
+</head>
+<body>
+<div id="score">SCORE: 0</div>
+<div id="loading">LOADING...</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050011);
+scene.fog = new THREE.Fog(0x050011, 10, 60);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({antialias: true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0x440066, 0.8));
+const pinkLight = new THREE.DirectionalLight(0xff00ff, 0.8);
+pinkLight.position.set(5, 10, 5);
+pinkLight.castShadow = true;
+scene.add(pinkLight);
+
+// Земля (чуть светлее, чтобы её было видно)
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(30, 3000),
+  new THREE.MeshStandardMaterial({color: 0x1a0033, roughness: 0.4, metalness: 0.6})
+);
+ground.rotation.x = -Math.PI/2;
+ground.position.z = -1400;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Неоновая сетка
+const gridHelper = new THREE.GridHelper(30, 30, 0xff00ff, 0x330055);
+gridHelper.position.z = -500;
+scene.add(gridHelper);
+
+const lanes = [-2, 0, 2];
+let currentLane = 1;
+let targetX = 0;
+let player, isJumping = false, velocityY = 0, runTime = 0;
+
+const loader = new THREE.GLTFLoader();
+loader.load('player_colored.glb', gltf => {
+  player = gltf.scene;
+  player.scale.set(1.2, 1.2, 1.2);
+  player.position.set(0, 0, 0); // Строго на уровне земли
+  player.rotation.y = Math.PI;
+  player.traverse(obj => { if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; } });
+  scene.add(player);
+  document.getElementById('loading').style.display = 'none';
+  animate();
+}, undefined, () => { document.getElementById('loading').textContent = 'ERROR!'; });
+
+const obstacles = [];
+function spawnObstacle() {
+  const lane = Math.floor(Math.random() * 3);
+  const obs = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 1.5, 1.5),
+    new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff, emissiveIntensity: 0.6 })
+  );
+  obs.position.set(lanes[lane], 0.75, -100);
+  scene.add(obs);
+  obstacles.push(obs);
+}
+
+let speed = 0.8, score = 0, gameOver = false, gameStarted = false;
+
+document.addEventListener('keydown', e => {
+  if (gameOver && e.key.toLowerCase() === 'r') location.reload();
+  if (!gameStarted) return;
+  if ((e.key === 'ArrowLeft' || e.key === 'a') && currentLane > 0) currentLane--;
+  if ((e.key === 'ArrowRight' || e.key === 'd') && currentLane < 2) currentLane++;
+  if (e.key === ' ' && !isJumping) { isJumping = true; velocityY = 0.5; }
+  targetX = lanes[currentLane];
+});
+
+let touchStartX = 0, touchStartY = 0;
+document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY; });
+document.addEventListener('touchend', e => {
+  if (gameOver) { location.reload(); return; }
+  if (!gameStarted) return;
+  const diffX = e.changedTouches[0].clientX - touchStartX;
+  const diffY = e.changedTouches[0].clientY - touchStartY;
+  if (Math.abs(diffX) > Math.abs(diffY)) {
+    if (diffX > 30 && currentLane < 2) currentLane++;
+    else if (diffX < -30 && currentLane > 0) currentLane--;
+  } else {
+    if (diffY < -30 && !isJumping) { isJumping = true; velocityY = 0.5; }
+  }
+  targetX = lanes[currentLane];
+});
+
+let spawnTimer = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  if (player && !gameOver) {
+    gameStarted = true;
+    runTime += 0.15;
+    player.position.x += (targetX - player.position.x) * 0.2;
+
+    if (!isJumping) {
+      player.position.y = Math.abs(Math.sin(runTime * 2)) * 0.1; // Легкое подпрыгивание от 0
+      player.rotation.x = 0.1 + Math.sin(runTime) * 0.05;
+      player.rotation.z = Math.sin(runTime * 2) * 0.08;
+    } else {
+      player.position.y += velocityY;
+      velocityY -= 0.04;
+      if (player.position.y <= 0) { player.position.y = 0; isJumping = false; velocityY = 0; }
+    }
+
+    obstacles.forEach(o => o.position.z += speed);
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      if (obstacles[i].position.z > 5) { scene.remove(obstacles[i]); obstacles.splice(i, 1); score++; speed += 0.004; }
+    }
+    spawnTimer++;
+    if (spawnTimer > 40) { spawnObstacle(); spawnTimer = 0; }
+
+    obstacles.forEach(o => {
+      if (Math.abs(o.position.x - player.position.x) < 1 && Math.abs(o.position.z - player.position.z) < 1 && player.position.y < 1.5) {
+        gameOver = true;
+        document.getElementById('score').textContent = 'GAME OVER! Score: ' + score + ' (Обнови страницу)';
+      }
+    });
+
+    camera.position.set(player.position.x * 0.3, 3.5, player.position.z + 6);
+    camera.lookAt(player.position.x, 1, player.position.z - 5);
+    document.getElementById('score').textContent = 'SCORE: ' + score;
+  }
+  renderer.render(scene, camera);
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
